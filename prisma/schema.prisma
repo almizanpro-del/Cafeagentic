@@ -1,0 +1,781 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Supabase PostgreSQL (PRD §5 recommended stack)
+  // DATABASE_URL  = pooled connection (PgBouncer, port 6543) — used at runtime (serverless-safe)
+  // DIRECT_URL    = session/direct connection (port 5432) — used by Prisma CLI for db push / migrate
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============ ENUMS (stored as strings for portability) ============
+// Role: MEMBER | OWNER | STAFF | ADMIN
+// CafeStatus: PENDING | APPROVED | REJECTED | PAUSED
+// MembershipStatus: ACTIVE | EXPIRED | PENDING | CANCELLED
+// PerkType: DISCOUNT | HAPPY_HOUR | MILESTONE | BIRTHDAY | FIRST_VISIT | GROUP | OFF_PEAK | EXCLUSIVE
+
+model User {
+  id            String           @id @default(cuid())
+  email         String           @unique
+  password      String
+  name          String
+  role          String           @default("MEMBER")
+  language      String           @default("en")
+  city          String           @default("amman")
+  userType      String?          // student | nomad | general
+  emailVerified Boolean          @default(false)
+  phone          String?         // normalized E.164 digits (no "+") — written ONLY when verified via WhatsApp OTP
+  phoneVerifiedAt DateTime?      // verification moment; non-null means "one verified phone = one account" is enforced
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  sessions       Session[]
+  memberships    Membership[]
+  redemptions    Redemption[]        @relation("MemberRedemptions")
+  staffRedempts  Redemption[]        @relation("StaffRedemptions")
+  rewardProgress RewardProgress[]
+  ownedCafes     Cafe[]              @relation("OwnedCafes")
+  passTokens     PassToken[]
+  favorites      Favorite[]
+  authTokens     AuthToken[]
+  cafeStaff      CafeStaff[]
+  referralCode   String?  @unique // personal invite code (CP-XXXX-XXXX), assigned lazily
+  referralsMade  Referral[]       @relation("ReferralsMade")   // friends this member invited
+  referralCredit Referral[]       @relation("ReferralCredits") // referrals this member received
+  achievements   MemberAchievement[]
+  notificationPreference NotificationPreference?
+  deviceSignals  DeviceSignal[]
+  phoneVerifications PhoneVerification[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model City {
+  id       String  @id
+  name     String
+  nameAr   String
+  country  String
+  isActive Boolean @default(true)
+  cafes    Cafe[]
+}
+
+model Cafe {
+  staffLinks     CafeStaff[]
+  id             String  @id @default(cuid())
+  slug           String  @unique
+  name           String
+  nameAr         String
+  description    String
+  descriptionAr  String
+  cityId         String
+  city           City    @relation(fields: [cityId], references: [id])
+  neighborhood   String
+  neighborhoodAr String
+  address        String
+  lat            Float
+  lng            Float
+  phone          String?
+  hours          String  // e.g. "08:00-23:00" daily (simplified for MVP)
+  images         String  @default("") // comma-separated image paths
+  wifiQuality    Int     @default(2) // 0-3
+  power          Boolean @default(true)
+  studyFriendly  Boolean @default(true)
+  outdoor        Boolean @default(false)
+  petFriendly    Boolean @default(false)
+  priceLevel     Int     @default(2) // 1-3
+  rating         Float   @default(4.5)
+  status         String  @default("PENDING") // PENDING | APPROVED | REJECTED | PAUSED
+  ownerId        String?
+  owner          User?   @relation("OwnedCafes", fields: [ownerId], references: [id])
+  createdAt      DateTime @default(now())
+
+  perks       Perk[]
+  menuItems   MenuItem[]
+  photos      CafePhoto[]
+  instagramPosts CafeInstagramPost[]
+  instagramUrl String?
+  facebookUrl  String?
+  tiktokUrl    String?
+  websiteUrl   String?
+  showPrices   Boolean @default(true)
+  redemptions Redemption[]
+  progress    RewardProgress[]
+  favoritedBy Favorite[]
+  campaigns   CampaignInstance[]
+
+  @@index([cityId, status])
+  @@index([lat, lng])
+  @@index([ownerId])
+}
+
+model Perk {
+  id                    String  @id @default(cuid())
+  cafeId                String
+  cafe                  Cafe    @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  title                 String
+  titleAr               String
+  description           String
+  descriptionAr         String
+  type                  String  @default("DISCOUNT")
+  value                 String  // "15%", "2-for-1", "Free refill"
+  days                  String  @default("0,1,2,3,4,5,6") // day-of-week numbers
+  startTime             String  @default("00:00")
+  endTime               String  @default("23:59")
+  minOrder              Float?
+  dineIn                Boolean @default(true)
+  takeaway              Boolean @default(true)
+  countsTowardMilestone Boolean @default(true)
+  isActive              Boolean @default(true)
+  // Super-admin review: PENDING (owner created/edited) | APPROVED | REJECTED.
+  // Existing perks default to APPROVED so nothing changes for the live site.
+  approvalStatus        String  @default("APPROVED")
+  // Weekly redemption cap set by the café: max uses of this perk per Jordan
+  // week (Sunday→Saturday) across ALL members. Empty = no cap. Changing it
+  // sends the perk back for super-admin approval like other term changes.
+  weeklyCap             Int?
+
+  redemptions Redemption[]
+  // Inactive ledger rows created for campaign redemptions (type 'CAMPAIGN',
+  // isActive=false so they never appear in perk lists) — see CampaignInstance.
+  backingForCampaigns   CampaignInstance[] @relation("CampaignBackingPerk")
+
+  @@index([cafeId, isActive])
+  @@index([approvalStatus])
+}
+
+model Plan {
+  id              String  @id @default(cuid())
+  slug            String  @unique
+  name            String
+  nameAr          String
+  description     String
+  descriptionAr   String
+  price           Float
+  currency        String  @default("JOD")
+  interval        String  @default("month") // month | semester | year
+  intervalMonths  Int     @default(1)
+  durationDays    Int?                 // exact length in days (e.g. 30-day visitor pass); null = use intervalMonths
+  renews          Boolean @default(true) // false = one-off pass that ends on its own (no renewal reminders)
+  isStudent       Boolean @default(false)
+  isPopular       Boolean @default(false)
+  isActive        Boolean @default(true)
+  highlights      String  @default("") // pipe-separated highlights (en)
+  highlightsAr    String  @default("")
+
+  memberships    Membership[]
+  invitationCodes InvitationCode[]
+}
+
+model Membership {
+  id     String @id @default(cuid())
+  userId String
+  // Restrict (not Cascade): deleting a member must never silently erase their
+  // pass history — Redemption already Restricts on member for the same reason.
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  planId    String
+  plan      Plan    @relation(fields: [planId], references: [id])
+  status    String  @default("ACTIVE") // ACTIVE | EXPIRED | PENDING | CANCELLED
+  startsAt  DateTime @default(now())
+  endsAt    DateTime
+  source    String  @default("PAYMENT") // PAYMENT | INVITATION | ADMIN
+  createdAt DateTime @default(now())
+
+  @@index([userId, status])
+}
+
+model InvitationCode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  planId    String
+  plan      Plan     @relation(fields: [planId], references: [id])
+  maxUses   Int      @default(1)
+  usedCount Int      @default(0)
+  isActive  Boolean  @default(true)
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Redemption {
+  id                 String   @id @default(cuid())
+  memberId   String
+  member     User     @relation("MemberRedemptions", fields: [memberId], references: [id], onDelete: Restrict)
+  cafeId     String
+  cafe       Cafe     @relation(fields: [cafeId], references: [id], onDelete: Restrict)
+  perkId     String
+  perk       Perk     @relation(fields: [perkId], references: [id], onDelete: Restrict)
+  staffId    String?
+  staff      User?    @relation("StaffRedemptions", fields: [staffId], references: [id])
+  note       String?
+  deviceMeta String? // user agent / device info recorded at redemption time
+  createdAt  DateTime @default(now())
+  // Campaign Studio (Phase 1): set when the redeemed perk is campaign-backed.
+  // Null for ordinary perk redemptions, so every existing row is untouched.
+  campaignInstanceId String?
+  campaignInstance   CampaignInstance? @relation(fields: [campaignInstanceId], references: [id])
+
+  @@index([memberId, createdAt])
+  @@index([cafeId, createdAt])
+  @@index([campaignInstanceId])
+  // Date-range scans (admin review queue, CSV export) can't use the composite
+  // indexes above because memberId/cafeId lead them.
+  @@index([createdAt])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cafeId    String
+  cafe      Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, cafeId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorEmail String
+  action     String
+  entityType String
+  entityId   String?
+  detail     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model RewardProgress {
+  id            String   @id @default(cuid())
+  memberId      String
+  member        User     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  cafeId        String
+  cafe          Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  visits        Int      @default(0)
+  required      Int      @default(6)
+  rewardTitle   String   @default("Free drink")
+  rewardTitleAr String   @default("مشروب مجاني")
+  claimed       Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([memberId, cafeId])
+}
+
+model PassToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model WaitlistEntry {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  city      String   @default("amman")
+  userType  String?
+  createdAt DateTime @default(now())
+}
+
+// Café partner onboarding leads — the short "join" form on /join (stage 1 of
+// the partner journey). The team follows up on WhatsApp with the full
+// application, so only the minimum low-friction data is captured here.
+model PartnerLead {
+  id          String   @id @default(cuid())
+  contactName String
+  cafeName    String
+  cafeNameAr  String?
+  city        String   @default("amman")
+  area        String?
+  phone       String   // WhatsApp-first mobile number
+  email       String
+  hearAbout   String?  // instagram | friend | walked-in | member | other …
+  branches    String   @default("1") // number of locations: 1 | 2-3 | 4-10 | 10+
+  branchAreas String?  // free-text list of branch locations when more than one
+  perkIdeas   String   @default("") // comma-separated perk ideas the café picked
+  message     String?
+  locale      String   @default("en")
+  status      String   @default("NEW") // NEW | CONTACTED | APPLICATION_SENT | APPROVED | REJECTED
+  createdAt   DateTime @default(now())
+
+  @@index([status, createdAt])
+}
+
+// Outbound notification log — email + WhatsApp with graceful degradation:
+// every message is persisted QUEUED first, then SENT/FAILED with the provider
+// used, so nothing is lost while credentials (Resend/SMTP/Meta) are being set up.
+model Notification {
+  id        String   @id @default(cuid())
+  channel   String   // EMAIL | WHATSAPP
+  event     String   // WELCOME | WAITLIST_LEAD | WAITLIST_CONFIRM | MEMBERSHIP_ACTIVATED | REDEMPTION | CAFE_REVIEW | ADMIN_ALERT
+  recipient String   // email address or WhatsApp number (E.164, no +)
+  subject   String?
+  body      String
+  status    String   @default("QUEUED") // QUEUED | SENT | FAILED | SKIPPED
+  provider  String?  // resend | smtp | meta-cloud | none
+  error     String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([status, channel])
+  @@index([userId, event, createdAt])
+}
+
+// Single-use, hashed tokens for email verification and password reset.
+// Only the SHA-256 hash is stored; the raw token only ever lives in the email link.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+}
+
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   String    // VERIFY_EMAIL | RESET_PASSWORD
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, purpose])
+}
+
+// Staff members assigned to a café (one café can have several staff accounts).
+model CafeStaff {
+  id        String   @id @default(cuid())
+  cafeId    String
+  cafe      Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([cafeId, userId])
+  @@index([userId])
+}
+
+// Menu items. Shown to members only after an admin approves them.
+model MenuItem {
+  id            String   @id @default(cuid())
+  cafeId        String
+  cafe          Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  category      String   @default("OTHER")
+  name          String
+  nameAr        String
+  description   String   @default("")
+  descriptionAr String   @default("")
+  price         Float?   // JOD
+  photoId       String?  // approved photo shown on the menu (CafePhoto.id)
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([cafeId, status])
+}
+
+// Café photos: gallery (menuItemId null) or a menu item photo. Images are stored in the database.
+model CafePhoto {
+  id              String   @id @default(cuid())
+  cafeId          String
+  cafe            Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  menuItemId      String?
+  mime            String
+  data            Bytes
+  caption         String   @default("")
+  captionAr       String   @default("")
+  rightsConfirmed Boolean  @default(false)
+  status          String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  sortOrder       Int      @default(0)
+  isLogo          Boolean  @default(false) // the café logo (shown on the café card), not a gallery photo
+  createdAt       DateTime @default(now())
+
+  @@index([cafeId, status])
+}
+
+// ==================== Campaign Studio (Phase 1 governance foundation) ====================
+
+// Market dictionary. JO is the only active market at launch; expansion
+// candidates (AE, SA, LB, EG) are pre-configured but inactive. A cafe's market
+// resolves through its City.country. Currency/timezone feed the campaign path.
+model Market {
+  id        String   @id // ISO 3166-1 alpha-2, e.g. "JO"
+  name      String
+  nameAr    String
+  currency  String   // ISO 4217, e.g. "JOD"
+  timezone  String   // IANA, e.g. "Asia/Amman"
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  templateMarkets CampaignTemplateMarket[]
+  rules           CampaignRule[]
+}
+
+// Governed campaign template master. Edits here never change live campaigns:
+// publishing a change creates a new immutable CampaignTemplateVersion.
+model CampaignTemplate {
+  id                  String  @id @default(cuid())
+  slug                String  @unique
+  family              String  // WELCOME | REPEAT_VISIT | TIME_BASED | PRODUCT_PROMO | BUNDLE | APPRECIATION | EVENTS | SEASONAL | CUSTOM
+  name                String
+  nameAr              String
+  description         String
+  descriptionAr       String
+  objectives          String  @default("") // comma-separated objective tags
+  benefitType         String  // FREE_ITEM | DISCOUNT | UPGRADE | BUNDLE_PRICE | EXPERIENCE | CUSTOM
+  defaultDurationDays Int
+  minDurationDays     Int
+  maxDurationDays     Int
+  requiresReview      Boolean @default(false) // exceptional campaigns need manual CafePass review
+  status              String  @default("DRAFT") // DRAFT | ACTIVE | RETIRED
+  version             Int     @default(1) // current published version counter
+  createdBy           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  versions  CampaignTemplateVersion[]
+  markets   CampaignTemplateMarket[]
+  instances CampaignInstance[]
+
+  @@index([family, status])
+}
+
+// Immutable published snapshot of a template at a version. Campaign instances
+// pin one version; later template edits never alter their terms.
+model CampaignTemplateVersion {
+  id                     String           @id @default(cuid())
+  templateId             String
+  template               CampaignTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version                Int
+  fieldSchema            String // JSON: permitted config fields { key, label, labelAr, type, min, max, options, required, unit }
+  copyScaffold           String   @default("{}") // JSON: member-facing copy scaffolds EN/AR
+  redemptionConditions   String   @default("")
+  redemptionConditionsAr String   @default("")
+  purchaseRequirement    String? // structured purchase requirement, null = none
+  membershipTypes        String   @default("ALL")
+  schedulePermissions    String   @default("DAYS,HOURS,DATES")
+  capRanges              String   @default("{}") // JSON permitted cap ranges { perMemberMin/Max, monthlyMin/Max, totalMin/Max }
+  autoApprove            Boolean  @default(true) // owner activation without admin review
+  publishedAt            DateTime @default(now())
+  publishedBy            String?
+
+  @@unique([templateId, version])
+  @@index([templateId])
+}
+
+// Per-market availability and market-specific terms for a template.
+model CampaignTemplateMarket {
+  id              String           @id @default(cuid())
+  templateId      String
+  template        CampaignTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  marketId        String
+  market          Market           @relation(fields: [marketId], references: [id])
+  status          String           @default("AVAILABLE") // AVAILABLE | UNAVAILABLE
+  termsOverride   String?
+  termsOverrideAr String?
+
+  @@unique([templateId, marketId])
+  @@index([marketId])
+}
+
+// Centrally configured rules (CafePass admin only), scoped globally, per
+// market, or per campaign family. The deterministic validator reads these.
+model CampaignRule {
+  id        String   @id @default(cuid())
+  scope     String // GLOBAL | MARKET | FAMILY
+  marketId  String?
+  market    Market?  @relation(fields: [marketId], references: [id])
+  family    String?
+  key       String
+  valueJson String
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@index([key, scope])
+}
+
+// A cafe-specific campaign activation. Pins one template version. Status is a
+// governed lifecycle managed server-side (transitions wired in Phase 4).
+model CampaignInstance {
+  id                    String           @id @default(cuid())
+  cafeId                String
+  cafe                  Cafe             @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  templateId            String
+  template              CampaignTemplate @relation(fields: [templateId], references: [id])
+  templateVersion       Int
+  status                String           @default("DRAFT") // DRAFT | PENDING_REVIEW | APPROVED | SCHEDULED | ACTIVE | PAUSED | EXPIRED | CANCELLED | REJECTED
+  configJson            String           @default("{}") // validated against the pinned version's field schema
+  title                 String
+  titleAr               String
+  description           String           @default("")
+  descriptionAr         String           @default("")
+  promoText             String           @default("")
+  promoTextAr           String           @default("")
+  startsAt              DateTime?
+  endsAt                DateTime?
+  days                  String           @default("0,1,2,3,4,5,6")
+  startTime             String           @default("00:00")
+  endTime               String           @default("23:59")
+  capPerMember          Int?
+  capMonthly            Int?
+  capTotal              Int?
+  activationConfirmedAt DateTime?
+  // Ledger anchor: campaign redemptions write a Redemption row that requires a
+  // Perk reference, so each live campaign lazily gets one inactive perk row
+  // (type 'CAMPAIGN', isActive=false) carrying the offer title/value for
+  // receipts and history. Null until the first redemption or activation.
+  backingPerkId         String?
+  backingPerk           Perk? @relation("CampaignBackingPerk", fields: [backingPerkId], references: [id])
+  createdBy             String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  redemptions Redemption[]
+  events      CampaignEvent[]
+
+  @@index([cafeId, status])
+  @@index([templateId])
+}
+
+// Lightweight analytics events (redemption/detail events wired in later phases).
+model CampaignEvent {
+  id                 String   @id @default(cuid())
+  campaignInstanceId String
+  type               String // DETAIL_VIEW | REDEMPTION | ACTIVATED | EXPIRED | SUBMITTED | APPROVED | ...
+  memberId           String?
+  // Phase 4: structured context for lifecycle events, e.g. { "from": "DRAFT", "to": "SCHEDULED", "by": "user-id" }
+  metaJson           String?
+  createdAt          DateTime @default(now())
+
+  // Declared here so a future `prisma db push` re-creates the same ON DELETE
+  // CASCADE FK that scripts/sql/2026-10-31-campaign-studio.sql created by hand
+  // (previously the FK existed only in the DB and would be silently dropped).
+  campaignInstance   CampaignInstance @relation(fields: [campaignInstanceId], references: [id], onDelete: Cascade)
+
+  @@index([campaignInstanceId, type, createdAt])
+}
+
+// Public Instagram posts/reels the café chose to show (embedded, not hosted by us).
+model CafeInstagramPost {
+  id        String   @id @default(cuid())
+  cafeId    String
+  cafe      Cafe     @relation(fields: [cafeId], references: [id], onDelete: Cascade)
+  shortcode String
+  status    String   @default("PENDING")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([cafeId, shortcode])
+}
+
+// ==================== Guide directory (Jordan's café guide, /guide) ====================
+
+// Claim/partner STATE for the guide's 54 curated listings. The listing facts
+// (name, area, description, vibes) live in src/lib/directory.ts — this table
+// only tracks who claimed a listing and whether it is now a live partner café.
+// If the table does not exist yet, every guide API degrades gracefully and the
+// guide still renders (claims fall back to a plain PartnerLead row).
+model DirectoryListing {
+  id               String    @id @default(cuid())
+  slug             String    @unique // matches src/lib/directory.ts
+  status           String    @default("LISTED") // LISTED | CLAIM_REQUESTED | PARTNERED
+  hidden           Boolean   @default(false) // admin can hide a listing from the guide
+  claimContactName String?
+  claimEmail       String?
+  claimPhone       String?
+  claimNote        String?
+  leadId           String?   // PartnerLead created alongside the claim
+  cafeId           String?   // set when the café finishes onboarding (matched by slug)
+  claimedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status])
+}
+
+// Visitor photos for guide directory listings ("Add a photo" on /guide/<slug>).
+// Image bytes live in the DB (same approach as CafePhoto); every photo stays
+// PENDING until a superadmin approves it. Approved photos are public, shown
+// with the submitter's credit, and replace the branded placeholder cover.
+model GuidePhoto {
+  id              String   @id @default(cuid())
+  slug            String   // matches src/lib/directory.ts
+  mime            String
+  data            Bytes
+  credit          String   @default("") // public credit ("Photo: …")
+  note            String   @default("") // reserved for submitter context (never public)
+  rightsConfirmed Boolean  @default(false)
+  status          String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdAt       DateTime @default(now())
+
+  @@index([slug, status])
+  @@index([status, createdAt])
+}
+
+// Member referral program (legacy salvage, rebuilt for CafePass's model).
+// The reward is always MEMBERSHIP TIME — ours to give; never cash, never
+// account credit, never anything that touches purchase money (which always
+// settles directly between the member and the café at the counter).
+//
+// Lifecycle: the new member registers with the referrer's personal code →
+// a PENDING row is created (attribution). When the friend's email is verified
+// (proof of a real mailbox — blocks disposable fake-account farming), the row
+// flips to REWARDED and both sides are granted days by src/lib/referrals.ts.
+model Referral {
+  id           String    @id @default(cuid())
+  referrerId   String
+  referrer     User      @relation("ReferralsMade", fields: [referrerId], references: [id], onDelete: Restrict)
+  refereeId    String    @unique // one referral credit per new member, ever
+  referee      User      @relation("ReferralCredits", fields: [refereeId], references: [id], onDelete: Restrict)
+  status       String    @default("PENDING") // PENDING | REWARDED
+  referrerDays Int       // days granted to the referrer at confirmation
+  refereeDays  Int       // days granted to the friend at confirmation
+  createdAt    DateTime  @default(now())
+  rewardedAt   DateTime?
+
+  @@index([referrerId, status])
+}
+
+// Monthly explorer challenge claims (gamification widget). One row per
+// member + month key ('explorer-YYYY-MM'); the unique pair is the
+// server-side "already claimed" flag the legacy prototype kept in
+// localStorage. `days` records the membership days granted (0 = badge only).
+model MemberAchievement {
+  id        String   @id @default(cuid())
+  memberId  String
+  member    User     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  key       String   // 'explorer-YYYY-MM' — the market-local challenge month
+  days      Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, key])
+  @@index([memberId, createdAt])
+}
+
+// ==================== Intelligent Agents (Master Technical PRD v2.0) ====================
+// Event bus = a Postgres table (PRD §5.2). Append-only: rows are never edited,
+// only re-dispatched (status + attempts change). Every handler must be
+// idempotent — safe to run twice on the same event.
+model Event {
+  id             String    @id @default(cuid())
+  type           String    // membership.created | redemption.attempted | redemption.completed | redemption.blocked | user.inactive_14d | cafe.performance_low | offer.expiring | cafe.discovered | outreach.draft_ready | retention.message.sent ...
+  payload        Json      // agent-specific, privacy-safe (no raw secrets)
+  status         String    @default("PENDING") // PENDING | PROCESSING | PROCESSED | FAILED | DEAD
+  processedBy    String?   // comma-separated handler ids that completed successfully
+  attempts       Int       @default(0)
+  lastError      String?
+  nextAttemptAt  DateTime? // set when FAILED — exponential backoff
+  idempotencyKey String    @unique // deterministic per logical occurrence; replays are no-ops
+  createdAt      DateTime  @default(now())
+  processedAt    DateTime?
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([type, createdAt])
+}
+
+// Audit log of every agent decision (PRD §5.1, §6). Fraud blocks, challenge
+// decisions, retention sends, overrides — all land here, readable by humans.
+model AgentDecision {
+  id           String    @id @default(cuid())
+  agent        String    // fraud | matcher | retention | dispatcher | system
+  entityType   String    // Redemption | Member | Cafe | Event ...
+  entityId     String?
+  decision     String    // APPROVE | SOFT_CHALLENGE | HARD_BLOCK | OVERRIDDEN | SENT | SKIPPED ...
+  reasonCode   String?   // stable machine code, e.g. DUPLICATE_PERSON_DEVICE
+  reasonEn     String?   // staff-facing English line
+  reasonAr     String?   // staff-facing Arabic line (RTL ready)
+  inputSummary String?   // JSON, privacy-safe summary of the inputs (ids, counts — no PII beyond ids)
+  overrideBy   String?   // admin userId when a human overturned this decision
+  overrideNote String?
+  createdAt    DateTime  @default(now())
+
+  @@index([agent, createdAt])
+  @@index([entityType, entityId])
+  @@index([decision, createdAt])
+}
+
+// Per-agent feature flags, thresholds and message template keys (PRD §5.4, §6).
+// Everything an agent needs to change without a code deploy. Defaults live in
+// src/lib/agents/config.ts; rows here override them.
+model AgentConfig {
+  key       String   @id // "fraud.enabled", "fraud.max_per_hour", ...
+  value     String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+// Channel consent + quiet hours + weekly cap, per member (PRD §5.3).
+// Never message a user on a channel they have not opted into.
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailOptIn    Boolean  @default(true)
+  whatsappOptIn Boolean  @default(false) // WhatsApp needs explicit opt-in (PRD §5.3)
+  inAppOptIn    Boolean  @default(true)
+  quietStart    String   @default("22:00") // local-time window, Jordan in v1
+  quietEnd      String   @default("08:00")
+  weeklyCap     Int      @default(2)       // agent messages per user per week
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Member device fingerprints captured when the pass is opened / account is
+// created (PRD Agent 1: duplicate-person detection for the free first-visit
+// coffee). Only derived, non-reversible signals are stored.
+model DeviceSignal {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint String   // sha256(user-agent + accept-language + ip /24 or /48)
+  ipPrefix    String?  // /24 (IPv4) or /48 (IPv6) network prefix — coarse, never the full IP
+  source      String   // PASS_VIEW | SIGNUP | LOGIN
+  createdAt   DateTime @default(now())
+
+  @@index([fingerprint])
+  @@index([userId, createdAt])
+}
+
+// WhatsApp OTP verification (PRD decision: WhatsApp code, one verified phone
+// = one account). The 6-digit code is NEVER stored — only an HMAC-SHA256
+// keyed with OTP_SECRET (see src/lib/otp.ts). Rows double as the send-rate
+// ledger: 5 sends / 15 min per member, 3 / hour per phone, 20 / 15 min per
+// network prefix, 60 s spacing, 5 wrong tries per code, 10-minute validity.
+model PhoneVerification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone      String    // normalized E.164 digits (no "+") this code was sent to
+  codeHash   String    // HMAC-SHA256 of the code — never the code itself
+  status     String    @default("PENDING") // PENDING | VERIFIED | CONSUMED
+  attempts   Int       @default(0) // wrong tries spent on this code
+  ipPrefix   String?   // coarse network prefix (/24 IPv4, /48 IPv6) for the per-network send limit
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  verifiedAt DateTime?
+
+  @@index([userId, createdAt])
+  @@index([phone, createdAt])
+  @@index([ipPrefix, createdAt])
+  @@index([status, expiresAt])
+}
