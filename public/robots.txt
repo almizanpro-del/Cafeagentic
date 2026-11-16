@@ -1,0 +1,11 @@
+# CafePass robots.txt — public marketing and guide pages are crawlable.
+# Authenticated dashboards and API endpoints are private application surfaces.
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /pass
+Disallow: /staff
+Disallow: /business
+Disallow: /admin
+
+Sitemap: https://cafepass.net/sitemap.xml

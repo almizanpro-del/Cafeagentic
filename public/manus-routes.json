@@ -1,0 +1,17 @@
+{
+  "routes": [
+    { "path": "/", "title": "CaféPass home" },
+    { "path": "/cafes", "title": "Cafés in Amman" },
+    { "path": "/cafes/:slug", "title": "Café detail" },
+    { "path": "/guide", "title": "Jordan café guide" },
+    { "path": "/guide/:slug", "title": "Café guide detail" },
+    { "path": "/plans", "title": "Membership plans" },
+    { "path": "/join", "title": "Café partner onboarding" },
+    { "path": "/legal", "title": "Terms and policies" },
+    { "path": "/login", "title": "Sign in" },
+    { "path": "/pass", "title": "Member app" },
+    { "path": "/staff", "title": "Staff app" },
+    { "path": "/business", "title": "Business app" },
+    { "path": "/admin", "title": "Admin app" }
+  ]
+}

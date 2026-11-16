@@ -1,0 +1,46 @@
+{
+  "id": "/pass",
+  "name": "CaféPass",
+  "short_name": "CaféPass",
+  "start_url": "/pass",
+  "scope": "/pass",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f4ed",
+  "theme_color": "#076064",
+  "lang": "en",
+  "dir": "auto",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My Pass",
+      "short_name": "Pass",
+      "url": "/pass",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

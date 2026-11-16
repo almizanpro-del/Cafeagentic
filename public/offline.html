@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CaféPass — Offline</title>
+  <meta name="theme-color" content="#076064" />
+  <link rel="icon" href="/icons/favicon-32.png" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100dvh; display: grid; place-items: center;
+      background: #faf6ef; color: #173a3b;
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 24px;
+    }
+    .card {
+      max-width: 420px; width: 100%; text-align: center;
+      background: #fff; border: 1px solid #e7e0d2; border-radius: 20px; padding: 36px 28px;
+      box-shadow: 0 10px 30px rgba(4, 94, 98, .08);
+    }
+    .logo { font-size: 28px; font-weight: 800; letter-spacing: .3px; color: #076064; }
+    .logo span { color: #ff741d; }
+    h1 { font-size: 19px; margin-top: 18px; }
+    p { color: #5c7475; font-size: 14px; line-height: 1.7; margin-top: 10px; }
+    button {
+      margin-top: 22px; background: #076064; color: #fff; border: 0; cursor: pointer;
+      padding: 12px 28px; border-radius: 12px; font-size: 15px; font-weight: 600;
+    }
+    button:hover { background: #034b4e; }
+    [dir="rtl"] .ar { display: block; } .ar { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Café<span>Pass</span></div>
+    <div class="en">
+      <h1>You're offline</h1>
+      <p>Your pass is saved on this device — but perks and café pages need a connection. Check your network and try again.</p>
+    </div>
+    <div class="ar" dir="rtl">
+      <h1>لا يوجد اتصال بالإنترنت</h1>
+      <p>بطاقتك محفوظة على هذا الجهاز، لكن المزايا وصفحات المقاهي تحتاج اتصالًا. تحقق من الشبكة وحاول مجددًا.</p>
+    </div>
+    <button onclick="location.reload()">Try again · حاول مجددًا</button>
+  </div>
+  <script>
+    if (new URLSearchParams(location.search).get('lang') === 'ar' || navigator.language.startsWith('ar')) {
+      document.querySelector('.en').style.display = 'none';
+      document.querySelector('.ar').style.display = 'block';
+      document.documentElement.lang = 'ar'; document.documentElement.dir = 'rtl';
+    }
+  </script>
+</body>
+</html>
